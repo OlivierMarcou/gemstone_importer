@@ -1,7 +1,10 @@
 package com.gemstone.viewer.ui;
 
 import com.gemstone.viewer.db.DatabaseManager;
+import com.gemstone.viewer.model.EtsyListing;
 import com.gemstone.viewer.model.Gemstone;
+
+import java.util.List;
 
 import javax.imageio.ImageIO;
 import javax.swing.*;
@@ -306,8 +309,153 @@ public class GemstoneDetailDialog extends JDialog {
             panel.add(Box.createVerticalStrut(12));
         }
 
+        // === Fiches Etsy liées ===
+        if (db != null && db.hasEtsyTables()) {
+            JPanel etsyCard = buildCard("🛍️ Fiches Etsy associées");
+            etsyCard.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
+            refreshEtsySection(etsyCard);
+            panel.add(etsyCard);
+            panel.add(Box.createVerticalStrut(12));
+        }
+
         panel.add(Box.createVerticalGlue());
         return panel;
+    }
+
+    private void refreshEtsySection(JPanel etsyCard) {
+        // Remove children after the separator
+        // Rebuild from scratch each call
+        // Keep the title label and separator (first 3 children added by buildCard)
+        while (etsyCard.getComponentCount() > 3) etsyCard.remove(etsyCard.getComponentCount() - 1);
+
+        SwingWorker<List<EtsyListing>, Void> worker = new SwingWorker<>() {
+            @Override protected List<EtsyListing> doInBackground() throws Exception {
+                return db.getListingsForGemstone(gem.getId());
+            }
+            @Override protected void done() {
+                try {
+                    List<EtsyListing> listings = get();
+
+                    if (listings.isEmpty()) {
+                        JLabel empty = new JLabel("Aucune fiche Etsy associée");
+                        empty.setFont(new Font("Segoe UI", Font.ITALIC, 11));
+                        empty.setForeground(TEXT_SECONDARY);
+                        empty.setAlignmentX(Component.LEFT_ALIGNMENT);
+                        empty.setBorder(new EmptyBorder(0, 0, 6, 0));
+                        etsyCard.add(empty);
+                    } else {
+                        for (EtsyListing l : listings) {
+                            JPanel row = new JPanel(new BorderLayout(8, 0));
+                            row.setOpaque(false);
+                            row.setAlignmentX(Component.LEFT_ALIGNMENT);
+                            row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 32));
+                            row.setBorder(new EmptyBorder(2, 0, 2, 0));
+
+                            // Ref badge
+                            JLabel refBadge = new JLabel(l.getJewelryType().getEmoji() + " " + l.getListingRef());
+                            refBadge.setFont(new Font("Segoe UI Mono", Font.BOLD, 12));
+                            refBadge.setForeground(new Color(245, 140, 50));
+                            refBadge.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+                            refBadge.setPreferredSize(new Dimension(140, 22));
+                            refBadge.setToolTipText("Cliquer pour ouvrir la fiche");
+                            refBadge.addMouseListener(new MouseAdapter() {
+                                @Override public void mouseClicked(MouseEvent e) {
+                                    openEtsyListing(l.getId());
+                                }
+                            });
+
+                            // Title truncated
+                            String t = l.getTitle() != null ? l.getTitle() : "";
+                            if (t.length() > 40) t = t.substring(0, 40) + "…";
+                            JLabel titleLbl = new JLabel(t);
+                            titleLbl.setFont(new Font("Segoe UI", Font.PLAIN, 11));
+                            titleLbl.setForeground(TEXT_SECONDARY);
+
+                            // Status
+                            JLabel stLbl = new JLabel("● " + l.getStatus().getLabel());
+                            stLbl.setFont(new Font("Segoe UI", Font.BOLD, 10));
+                            stLbl.setForeground(l.getStatus().getColor());
+                            stLbl.setPreferredSize(new Dimension(90, 18));
+
+                            row.add(refBadge, BorderLayout.WEST);
+                            row.add(titleLbl, BorderLayout.CENTER);
+                            row.add(stLbl, BorderLayout.EAST);
+                            etsyCard.add(row);
+                        }
+                    }
+
+                    // "Link" button
+                    etsyCard.add(Box.createVerticalStrut(8));
+                    JButton linkBtn = new JButton("➕ Associer à une fiche Etsy");
+                    linkBtn.setFont(new Font("Segoe UI", Font.PLAIN, 11));
+                    linkBtn.setBackground(CARD_BG);
+                    linkBtn.setForeground(new Color(245, 140, 50));
+                    linkBtn.setBorder(new LineBorder(new Color(245, 140, 50), 1, true));
+                    linkBtn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+                    linkBtn.setFocusPainted(false);
+                    linkBtn.setAlignmentX(Component.LEFT_ALIGNMENT);
+                    linkBtn.addActionListener(e -> linkToEtsyListing(etsyCard));
+                    etsyCard.add(linkBtn);
+
+                    etsyCard.revalidate(); etsyCard.repaint();
+                } catch (Exception e) { e.printStackTrace(); }
+            }
+        };
+        worker.execute();
+    }
+
+    private void openEtsyListing(int listingId) {
+        try {
+            EtsyListing l = db.getListingById(listingId);
+            if (l != null) new EtsyListingDialog(this, l, db, null).setVisible(true);
+        } catch (Exception e) { e.printStackTrace(); }
+    }
+
+    private void linkToEtsyListing(JPanel etsyCard) {
+        // Build list of available refs
+        List<String> refs;
+        try { refs = db.getAllListingRefs(); }
+        catch (Exception e) { refs = new java.util.ArrayList<>(); }
+
+        if (refs.isEmpty()) {
+            JOptionPane.showMessageDialog(this,
+                "Aucune fiche Etsy disponible. Créez d'abord une fiche dans l'onglet Etsy.",
+                "Information", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+
+        JComboBox<String> refCombo = new JComboBox<>(refs.toArray(new String[0]));
+        refCombo.setEditable(true);
+        refCombo.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+
+        JTextField notesField = new JTextField();
+        notesField.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+
+        JPanel form = new JPanel(new GridLayout(4, 1, 4, 4));
+        form.add(new JLabel("Référence de la fiche Etsy :"));
+        form.add(refCombo);
+        form.add(new JLabel("Note sur le rôle de cette pierre (optionnel) :"));
+        form.add(notesField);
+
+        int r = JOptionPane.showConfirmDialog(this, form, "Associer à une fiche Etsy",
+            JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (r != JOptionPane.OK_OPTION) return;
+
+        String selectedRef = (String) refCombo.getSelectedItem();
+        if (selectedRef == null || selectedRef.isBlank()) return;
+
+        try {
+            EtsyListing target = db.getListingByRef(selectedRef);
+            if (target == null) {
+                JOptionPane.showMessageDialog(this, "Référence '" + selectedRef + "' introuvable.",
+                    "Erreur", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+            db.linkGemstoneToListing(gem.getId(), target.getId(), notesField.getText().trim(), 1);
+            refreshEtsySection(etsyCard);
+        } catch (Exception e) {
+            JOptionPane.showMessageDialog(this, "Erreur : " + e.getMessage(), "Erreur", JOptionPane.ERROR_MESSAGE);
+        }
     }
 
     private void saveStatus() {
